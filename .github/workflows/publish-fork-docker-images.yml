@@ -1,0 +1,92 @@
+# ============================================================================
+# Publish fork Docker images to GHCR (zonbar/BiliBiliToolPro)
+#
+# 每次 push 到 main 自动构建多架构镜像并推送到 ghcr.io/zonbar/bili_tool_web：
+#   - :latest       浮动 tag，永远指向最新 main（NAS 上 docker compose pull 即更新）
+#   - :alpha        同 :latest 的别名
+#   - :<版本号>      如 4.3.0-alpha.N，由 scripts/version-next.sh 从 tag 历史推导
+#
+# 触发：push 到 main；也可在 Actions 页手动 Run workflow。
+# 权限：packages: write 用于推送 GHCR。
+# 注意：GHCR 新镜像默认是 private，首次发布后需到 GitHub → Packages 把该包设为
+#       public（或登录），NAS 才能匿名 docker pull。
+# ============================================================================
+
+name: Publish fork Docker images (GHCR)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".github/workflows/**"
+      - ".editorconfig"
+      - "bruno/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write # 推 GHCR
+
+# 必须串行：alpha 序号 = 自上个稳定 tag 以来的提交数，并发 run 算出同号会互相覆盖 tag。
+concurrency:
+  group: fork-alpha-main
+  cancel-in-progress: false
+
+env:
+  GHCR_IMG_NAME: ghcr.io/zonbar/bili_tool_web
+
+jobs:
+  determine-version:
+    name: Determine version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # fetch-depth: 0 才能拿到全部 tag，alpha 序号由 tag 历史推导
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: version
+        run: |
+          version=$(bash ./scripts/version-next.sh alpha)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "版本：$version"
+
+  publish-images:
+    name: Build and push GHCR images
+    needs: determine-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 编译阶段跑在 BUILDPLATFORM 上、final 层无 RUN（ADR-0004），全程不执行
+      # 目标架构指令，无需 QEMU。
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ needs.determine-version.outputs.version }}
+          tags: |
+            ${{ env.GHCR_IMG_NAME }}:${{ needs.determine-version.outputs.version }}
+            ${{ env.GHCR_IMG_NAME }}:alpha
+            ${{ env.GHCR_IMG_NAME }}:latest
+          # 缓存存进 GHCR（registry 层直推，比 Actions Cache 快），image-manifest=true
+          # 是 GHCR 要求的 OCI media type，不加会推失败。
+          cache-from: type=registry,ref=${{ env.GHCR_IMG_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.GHCR_IMG_NAME }}:buildcache,mode=max,image-manifest=true
