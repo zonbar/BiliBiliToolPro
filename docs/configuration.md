@@ -401,6 +401,8 @@ Specify a creator ID for automatic charging. Older behavior allowed charging you
 <a id="markdown-38-推送相关" name="38-推送相关"></a>
 ### 3.8. Notifications
 
+In the Web panel, open **Task configuration → Message push** (`/Configurations/PushConfig`) to configure every push channel below (Telegram, WeCom group bot, DingTalk, ServerChan, CoolPush, custom API, PushPlus, Microsoft Teams, WeCom app, and Gotify) through the UI, and use the per-channel **Test message** button to verify a channel before relying on it. Settings are stored in the SQLite config table (`Serilog__WriteTo__{index}__Args__...`), take effect immediately after saving, and do not require a restart.
+
 #### Account checks and scheduled-task failure summaries
 
 In the Web panel, open **Task configuration → Checks and reminders** to configure automatic account checks, Cookie expiry reminders, and per-task failure reminders.

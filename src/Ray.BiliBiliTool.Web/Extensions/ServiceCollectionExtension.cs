@@ -32,6 +32,7 @@ public static class ServiceCollectionExtension
             CookieNotificationSettingsWorkflow
         >();
         services.AddScoped<INotificationSettingsWorkflow, NotificationSettingsWorkflow>();
+        services.AddScoped<IPushSettingsWorkflow, PushSettingsWorkflow>();
         services.AddMemoryCache();
         services.AddScoped<ILiveMedalDashboardService, LiveMedalDashboardService>();
 

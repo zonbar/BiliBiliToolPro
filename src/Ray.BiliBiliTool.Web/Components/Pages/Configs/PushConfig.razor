@@ -1,0 +1,209 @@
+@page "/Configurations/PushConfig"
+@using Microsoft.AspNetCore.Authorization
+@using Ray.BiliBiliTool.Web.Services.Pages.Configs
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inject IPushSettingsWorkflow Workflow
+
+<PageTitle>消息推送</PageTitle>
+
+<MudContainer Class="app-config-page">
+    <PageHero Size="Size.Small" Title="消息推送" Description="配置 Telegram、企业微信、钉钉等推送通道，并发送测试消息验证。" />
+
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
+        Cookie 过期提醒、任务失败汇总等通知会经由 Serilog 日志管道转发到下方已配置的推送通道。
+        修改配置并保存后立即生效，无需重启应用；各通道的参数保存在 config/BiliBiliTool.db 中，请勿泄露 Token 等敏感信息。
+    </MudAlert>
+
+    @if (_loading)
+    {
+        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+    }
+    else
+    {
+        <MudExpansionPanels MultiExpansion="true">
+            @foreach (var channel in _channels)
+            {
+                <MudExpansionPanel Class="mb-2">
+                    <TitleContent>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@channel.Definition.Icon" Size="Size.Medium" Color="Color.Primary" />
+                            <MudText Typo="Typo.h6">@channel.Definition.DisplayName</MudText>
+                            @if (channel.Configured)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">已配置</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">未配置</MudChip>
+                            }
+                        </MudStack>
+                    </TitleContent>
+                    <ChildContent>
+                        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-3">
+                            @channel.Definition.Description
+                        </MudText>
+                        <MudGrid>
+                            @foreach (var field in channel.Definition.Fields)
+                            {
+                                <MudItem xs="12" md="@(field.Kind == PushFieldKind.TextArea ? 12 : 6)">
+                                    @switch (field.Kind)
+                                    {
+                                        case PushFieldKind.TextArea:
+                                            <MudTextArea Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
+                                                         Label="@FieldLabel(field)" Rows="3"
+                                                         Placeholder="@field.Placeholder" HelperText="@field.HelperText" />
+                                            break;
+                                        case PushFieldKind.Password:
+                                            <MudTextField T="string" Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
+                                                          Label="@FieldLabel(field)" InputType="InputType.Password"
+                                                          Placeholder="@field.Placeholder" HelperText="@field.HelperText" />
+                                            break;
+                                        case PushFieldKind.Select:
+                                            <MudSelect T="string" Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
+                                                       Label="@FieldLabel(field)" HelperText="@field.HelperText">
+                                                <MudSelectItem Value="@string.Empty">（留空）</MudSelectItem>
+                                                @foreach (var option in field.Options ?? [])
+                                                {
+                                                    <MudSelectItem Value="@option">@option</MudSelectItem>
+                                                }
+                                            </MudSelect>
+                                            break;
+                                        default:
+                                            <MudTextField T="string" Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
+                                                          Label="@FieldLabel(field)"
+                                                          Placeholder="@field.Placeholder" HelperText="@field.HelperText" />
+                                            break;
+                                    }
+                                </MudItem>
+                            }
+                        </MudGrid>
+                        <MudStack Row="true" Spacing="2" Class="mt-3" AlignItems="AlignItems.Center">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveAsync(channel)" Disabled="@(channel.Testing || channel.Saving)">
+                                <MudIcon Icon="@Icons.Material.Filled.Save" Class="mr-1" /> 保存
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="() => TestAsync(channel)" Disabled="@(channel.Testing || channel.Saving)">
+                                发送测试消息
+                            </MudButton>
+                            @if (channel.Testing)
+                            {
+                                <MudProgressCircular Size="Size.Small" Color="Color.Primary" Indeterminate="true" />
+                            }
+                        </MudStack>
+                        @if (channel.Message is not null)
+                        {
+                            <MudAlert Severity="@(channel.Success ? Severity.Success : Severity.Error)" Variant="Variant.Outlined" Class="mt-3">
+                                @channel.Message
+                            </MudAlert>
+                        }
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    }
+</MudContainer>
+
+@code {
+    private bool _loading = true;
+    private List<ChannelEditState> _channels = [];
+
+    protected override void OnInitialized()
+    {
+        Load();
+    }
+
+    private void Load()
+    {
+        try
+        {
+            var current = Workflow.Read();
+            _channels = PushChannelCatalog
+                .All.Select(channel =>
+                {
+                    var values = current.TryGetValue(channel.Index, out var stored)
+                        ? new Dictionary<string, string>(stored, StringComparer.OrdinalIgnoreCase)
+                        : channel.Fields.ToDictionary(
+                            field => field.Key,
+                            field => field.DefaultValue ?? string.Empty,
+                            StringComparer.OrdinalIgnoreCase
+                        );
+                    return new ChannelEditState(channel, values, channel.IsChannelConfigured(values));
+                })
+                .ToList();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string FieldLabel(PushFieldDefinition field) =>
+        field.Required ? $"{field.Label} *" : field.Label;
+
+    private string GetValue(ChannelEditState channel, PushFieldDefinition field) =>
+        channel.Values.TryGetValue(field.Key, out var value) ? value : string.Empty;
+
+    private void SetValue(ChannelEditState channel, PushFieldDefinition field, string? value)
+    {
+        channel.Values[field.Key] = value ?? string.Empty;
+        StateHasChanged();
+    }
+
+    private async Task SaveAsync(ChannelEditState channel)
+    {
+        channel.Saving = true;
+        channel.Message = null;
+        try
+        {
+            Workflow.Save(channel.Definition.Index, channel.Values);
+            channel.Configured = channel.Definition.IsChannelConfigured(channel.Values);
+            channel.Success = true;
+            channel.Message = "配置已保存，推送通道已生效。";
+        }
+        catch (Exception error)
+        {
+            channel.Success = false;
+            channel.Message = error is InvalidOperationException ? error.Message : "保存失败，请稍后重试";
+        }
+        finally
+        {
+            channel.Saving = false;
+        }
+    }
+
+    private async Task TestAsync(ChannelEditState channel)
+    {
+        channel.Testing = true;
+        channel.Message = null;
+        try
+        {
+            var result = await Workflow.TestAsync(channel.Definition, channel.Values);
+            channel.Success = result.Success;
+            channel.Message = result.Message;
+        }
+        catch (Exception error)
+        {
+            channel.Success = false;
+            channel.Message = $"发送失败：{error.Message}";
+        }
+        finally
+        {
+            channel.Testing = false;
+        }
+    }
+
+    private sealed class ChannelEditState(
+        PushChannelDefinition definition,
+        Dictionary<string, string> values,
+        bool configured
+    )
+    {
+        public PushChannelDefinition Definition { get; } = definition;
+        public Dictionary<string, string> Values { get; } = values;
+        public bool Configured { get; set; } = configured;
+        public string? Message { get; set; }
+        public bool Success { get; set; }
+        public bool Testing { get; set; }
+        public bool Saving { get; set; }
+    }
+}
