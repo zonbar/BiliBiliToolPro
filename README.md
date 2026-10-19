@@ -35,6 +35,8 @@ It supports QR-code login and cookie updates, multiple Bilibili accounts, daily 
   <img src="docs/imgs/web-schedules-log.png" alt="Web panel execution logs" width="800">
   <br>
   <img src="docs/imgs/web-configs.png" alt="Web panel configuration" width="800">
+  <br>
+  <img src="docs/imgs/push-config.png" alt="Web panel push configuration" width="800">
 </p>
 
 ## Get started
