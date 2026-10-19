@@ -81,6 +81,7 @@ BiliBiliToolPro 的消息推送全部经由 Serilog 日志管道转发到 10 个
 **改动文件**（commit `7cbef00`）：
 - `src/Ray.BiliBiliTool.Infrastructure/Notifications/SerilogNotificationAdapter.cs`：构造函数注入 `IConfiguration`，读取 `Notify:Title`，在 `SendAsync` 与 `SendSummaryAsync` 两条路径统一加 `[<title>] ` 前缀。
 - `src/Ray.BiliBiliTool.Web/appsettings.json` 与 `src/Ray.BiliBiliTool.Console/appsettings.json`：新增顶层 `"Notify": { "Title": "" }`（留空为默认）。
+- `src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor` 与 `Services/Pages/Configs/PushSettingsWorkflow.cs`（commit `b1d4a1f` 起）：在「消息推送」页顶部新增「全局消息标题」卡片，经 SQLite 覆盖键 `Notify:Title` 读写并触发配置重载（`ReadTitle()` / `SaveTitle()`），留空则删除覆盖键回退默认。
 
 **验证**（反射控制台 + 独立 harness，确定性核验）：
 - 10 个 Ray sink 扩展方法签名均无 `title` 参数（botToken/chatId/webHookUrl/token/scKey/host/corpId/api/bodyJsonTemplate…）。✓

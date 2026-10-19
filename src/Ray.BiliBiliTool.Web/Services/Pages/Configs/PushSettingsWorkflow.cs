@@ -24,6 +24,16 @@ public interface IPushSettingsWorkflow
     void Save(int channelIndex, IReadOnlyDictionary<string, string> values);
 
     /// <summary>
+    /// 读取全局自定义消息标题（Notify:Title，含 SQLite 覆盖层与 appsettings 默认值）。
+    /// </summary>
+    string ReadTitle();
+
+    /// <summary>
+    /// 保存全局自定义消息标题到 SQLite 配置表并触发配置重载（留空则回退到默认）。
+    /// </summary>
+    void SaveTitle(string? title);
+
+    /// <summary>
     /// 仅使用目标通道构建一个临时 Serilog 管道，发送一条测试消息。
     /// 返回成功仅代表消息已提交发送，请到目标应用确认是否送达。
     /// </summary>
@@ -92,6 +102,32 @@ public sealed class PushSettingsWorkflow(IConfiguration configuration)
         }
         provider.BatchSet(configValues, keysToDelete);
         root!.Reload();
+    }
+
+    public string ReadTitle() => _configuration["Notify:Title"] ?? string.Empty;
+
+    public void SaveTitle(string? title)
+    {
+        var root =
+            _configuration as IConfigurationRoot
+            ?? throw new InvalidOperationException("保存失败，请稍后重试");
+        var provider =
+            root.Providers.OfType<SqliteConfigurationProvider>().LastOrDefault()
+            ?? throw new InvalidOperationException("保存失败，请稍后重试");
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            // 留空则删除 SQLite 覆盖键，回退到 appsettings 默认（行为与未设置一致）。
+            provider.BatchSet(new Dictionary<string, string>(), ["Notify:Title"]);
+        }
+        else
+        {
+            provider.BatchSet(
+                new Dictionary<string, string> { ["Notify:Title"] = title.Trim() },
+                []
+            );
+        }
+        root.Reload();
     }
 
     public async Task<PushTestResult> TestAsync(
