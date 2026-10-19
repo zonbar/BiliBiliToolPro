@@ -1,4 +1,4 @@
-## 4.2.4 (unreleased)
+## 4.2.4
 - feat(web): 新增「消息推送」配置页（任务配置 → 消息推送），集中可视化配置并测试全部推送渠道
 - feat(push): 内置飞书、Bark、PushDeer 三个推送通道（共享库 `Ray.BiliBiliTool.Push`，Web / Console 双主机可用）
 - feat(notify): 支持自定义全局消息标题（`Notify:Title`），作用于所有通道的正式消息与测试消息
