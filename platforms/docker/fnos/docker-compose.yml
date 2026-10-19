@@ -1,55 +1,58 @@
 # ============================================================================
-# BiliBiliToolPro —— 飞牛NAS (fnOS) Docker Compose 部署（直接拉取镜像，无需 build）
+# BiliBiliToolPro —— 飞牛NAS (fnOS) Docker Compose（直接拉取镜像，无需 build）
 #
-# 部署模型：容器只跑 Web 面板（内置 Quartz 任务调度，同时负责登录/任务/推送），
-#           对外监听 8080。不建议再单独跑一个 Console 容器，否则会重复执行任务。
+# 使用：
+#   1) 把本文件放到飞牛NAS任意目录（如 /vol1/1000/docker/bilitool/）
+#   2) 在同目录执行： docker compose up -d
+#      首次会自动从 GitHub Container Registry (ghcr.io) 拉取镜像
+#   3) 浏览器访问： http://<NAS-IP>:22330   （默认账号 admin / BiliTool@2233）
 #
-# 数据持久化：./bilitool_data/{config,Logs}（相对 compose 文件所在目录）；
-#   要固定路径可改成如 /vol1/1000/docker/bilitool/config:/app/config
+# 数据目录 ./bilitool_data/{config,Logs} 会生成在 compose 同目录；
+#   若要固定到数据盘，可改成如 /vol1/1000/docker/bilitool/config:/app/config
 #
-# 首次启动：docker compose up -d 会自动从 ghcr.io 拉取镜像。
+# 更新镜像：
+#   docker compose pull && docker compose up -d --force-recreate
 # ============================================================================
 
 services:
   bili_tool_web:
-    # 你 fork 自己的镜像（含推送管理页/内置通道/全局标题）。
-    # 需先在 GitHub 触发 publish-fork-docker-images workflow 发布一次后才可拉取；
-    # 首次发布后 GHCR 该包默认 private，需在 GitHub Packages 设为 public。
+    # 你自己的 fork 镜像（含推送管理页、内置飞书/Bark/PushDeer 通道、全局标题）
     image: ghcr.io/zonbar/bili_tool_web:latest
 
-    # 快速回退：若还没发布 fork 镜像，可临时改用官方预编译镜像（无自定义改动）：
+    # 快速回退：如果还没发布 fork 镜像，可临时换成官方预编译镜像（无自定义改动）：
     # image: ghcr.io/raywangqvq/bili_tool_web:latest
 
     container_name: bili_tool_web
     restart: unless-stopped
-    tty: true
 
+    # 宿主机端口 : 容器端口(8080 固定)。左侧 22330 可改成你想要的端口
     ports:
-      - "5333:8080"        # 宿主机端口:容器端口(8080 固定)。5333 可改成你想要的
+      - "22330:8080"
 
     volumes:
-      - ./bilitool_data/config:/app/config   # SQLite 数据库、cookies、推送配置
+      - ./bilitool_data/config:/app/config   # SQLite 配置库、cookies、推送配置
       - ./bilitool_data/Logs:/app/Logs       # 应用日志
 
     environment:
       TZ: "Asia/Shanghai"
 
-      # 每日任务执行 cron（默认每天 15:00 执行每日任务），可自行调整
+      # 每日任务执行 cron（默认每天 15:00 执行每日任务），可按需调整
       DailyTaskConfig__Cron: "0 0 15 * * ?"
 
-      # 全局自定义推送标题（等价于 appsettings.json 的 Notify:Title；留空/删掉则不启用）
-      # Notify__Title: "BiliBiliToolPro"
+      # 全局推送主标题（等价 appsettings 的 Notify:Title）。
+      # 推荐在后台「消息推送」页设置，会自动写入 config/BiliBiliTool.db 并持久化；
+      # 也可用下面的环境变量覆盖：
+      # Notify__Title: "BiliBiliToolPro提醒"
 
-      # 推送通道也可用环境变量覆盖（等价于 Serilog:WriteTo:<索引>:Args:<键>）。
-      # 例：飞书机器人(索引 13) webhook / Bark(14) / PushDeer(15)：
-      # Serilog__WriteTo__13__Args__webHookUrl: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+      # 推送通道参数也可用环境变量覆盖（等价 Serilog:WriteTo:<索引>:Args:<键>）。
+      # 自研通道索引：13=飞书机器人、14=Bark、15=PushDeer。例如：
       # Serilog__WriteTo__14__Args__server: "https://api.day.app"
-      # Serilog__WriteTo__14__Args__deviceToken: "xxx"
+      # Serilog__WriteTo__14__Args__deviceToken: "xxxx"
 
-    # 可选健康检查（Web 根路径会 302 到登录页，作存活探测足够）
-    # healthcheck:
-    #   test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo ok"]
-    #   interval: 30s
-    #   timeout: 5s
-    #   retries: 3
-    #   start_period: 30s
+    # 存活探测（Web 根路径 302 到登录页，用 /dev/tcp 探测 8080 端口即可）
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
