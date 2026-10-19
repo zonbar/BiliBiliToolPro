@@ -1,0 +1,389 @@
+From 0ca163ece036853d3083f0d46c9067b76e9ecff6 Mon Sep 17 00:00:00 2001
+From: jon <jon@local>
+Date: Mon, 19 Oct 2026 09:04:19 +0800
+Subject: [PATCH 3/4] feat(push): built-in Feishu/Bark/PushDeer sinks via
+ shared Ray.BiliBiliTool.Push
+
+Self-authored batched HTTP push sink (10s batch, sync flush on dispose, silent
+when unconfigured) plus FeishuPush / BarkPush / PushDeerPush extensions, moved
+into a shared class library referenced by both Web and Console hosts. Registered
+in Serilog:Using and WriteTo:13/14/15 (with default server/endpoint); the Web
+host's message-push page automatically renders these three channels.
+---
+ Ray.BiliBiliTool.sln                          |   7 +
+ .../HttpBatchedPushSink.cs                    | 139 ++++++++++++++++++
+ .../PushSinkExtensions.cs                     | 104 +++++++++++++
+ .../Ray.BiliBiliTool.Push.csproj              |  11 ++
+ .../Ray.BiliBiliTool.Web.csproj               |   1 +
+ src/Ray.BiliBiliTool.Web/appsettings.json     |  29 +++-
+ 6 files changed, 290 insertions(+), 1 deletion(-)
+ create mode 100644 src/Ray.BiliBiliTool.Push/HttpBatchedPushSink.cs
+ create mode 100644 src/Ray.BiliBiliTool.Push/PushSinkExtensions.cs
+ create mode 100644 src/Ray.BiliBiliTool.Push/Ray.BiliBiliTool.Push.csproj
+
+diff --git a/Ray.BiliBiliTool.sln b/Ray.BiliBiliTool.sln
+index adfa8d6..52ae12d 100644
+--- a/Ray.BiliBiliTool.sln
++++ b/Ray.BiliBiliTool.sln
+@@ -15,6 +15,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{E9BDDCBE-A
+ EndProject
+ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ray.BiliBiliTool.Console", "src\Ray.BiliBiliTool.Console\Ray.BiliBiliTool.Console.csproj", "{DB227D60-0737-45C2-8CEA-F55FDA711301}"
+ EndProject
++Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ray.BiliBiliTool.Push", "src\Ray.BiliBiliTool.Push\Ray.BiliBiliTool.Push.csproj", "{ABA72E0D-7B71-4331-B9F1-5C9B99F8B3E5}"
++EndProject
+ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ray.BiliBiliTool.Config.UnitTests", "test\Ray.BiliBiliTool.Config.UnitTests\Ray.BiliBiliTool.Config.UnitTests.csproj", "{114D45C8-E4BB-47EE-89AC-BD1DC6FA3BAD}"
+ EndProject
+ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Ray.BiliBiliTool.Notification.FunctionalTests", "test\Ray.BiliBiliTool.Notification.FunctionalTests\Ray.BiliBiliTool.Notification.FunctionalTests.csproj", "{2039BF6A-5EC4-439C-8D2E-77313075843A}"
+@@ -126,6 +128,10 @@ Global
+ 		{DB227D60-0737-45C2-8CEA-F55FDA711301}.Debug|Any CPU.Build.0 = Debug|Any CPU
+ 		{DB227D60-0737-45C2-8CEA-F55FDA711301}.Release|Any CPU.ActiveCfg = Release|Any CPU
+ 		{DB227D60-0737-45C2-8CEA-F55FDA711301}.Release|Any CPU.Build.0 = Release|Any CPU
++		{ABA72E0D-7B71-4331-B9F1-5C9B99F8B3E5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
++		{ABA72E0D-7B71-4331-B9F1-5C9B99F8B3E5}.Debug|Any CPU.Build.0 = Debug|Any CPU
++		{ABA72E0D-7B71-4331-B9F1-5C9B99F8B3E5}.Release|Any CPU.ActiveCfg = Release|Any CPU
++		{ABA72E0D-7B71-4331-B9F1-5C9B99F8B3E5}.Release|Any CPU.Build.0 = Release|Any CPU
+ 		{114D45C8-E4BB-47EE-89AC-BD1DC6FA3BAD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+ 		{114D45C8-E4BB-47EE-89AC-BD1DC6FA3BAD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+ 		{114D45C8-E4BB-47EE-89AC-BD1DC6FA3BAD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+@@ -247,6 +253,7 @@ Global
+ 		{98051127-2868-4F5C-9B2C-2150975E05F3} = {AF21E067-3307-4E7F-8CE8-C695E6B61876}
+ 		{120917DC-474C-448B-9EBB-1B3BA3A20B9D} = {AF21E067-3307-4E7F-8CE8-C695E6B61876}
+ 		{DB227D60-0737-45C2-8CEA-F55FDA711301} = {38736647-2196-417E-8519-C48A012A63D9}
++		{ABA72E0D-7B71-4331-B9F1-5C9B99F8B3E5} = {38736647-2196-417E-8519-C48A012A63D9}
+ 		{114D45C8-E4BB-47EE-89AC-BD1DC6FA3BAD} = {E9BDDCBE-A57D-4E3B-8252-708088386ADF}
+ 		{2039BF6A-5EC4-439C-8D2E-77313075843A} = {E9BDDCBE-A57D-4E3B-8252-708088386ADF}
+ 		{110D3D21-8E9B-45AB-9667-6DA1DB3862AC} = {AF21E067-3307-4E7F-8CE8-C695E6B61876}
+diff --git a/src/Ray.BiliBiliTool.Push/HttpBatchedPushSink.cs b/src/Ray.BiliBiliTool.Push/HttpBatchedPushSink.cs
+new file mode 100644
+index 0000000..954557a
+--- /dev/null
++++ b/src/Ray.BiliBiliTool.Push/HttpBatchedPushSink.cs
+@@ -0,0 +1,139 @@
++using System.Collections.Concurrent;
++using System.Text;
++using Serilog.Core;
++using Serilog.Events;
++
++namespace Ray.BiliBiliTool.Push;
++
++/// <summary>
++/// Minimal batched HTTP push sink used by the built-in push channels that have no upstream
++/// Ray.Serilog sink package (Feishu bot, Bark, PushDeer). It queues log messages and sends
++/// them as one aggregated HTTP request every interval; on dispose it flushes synchronously so
++/// a test push completes before the logger is torn down.
++///
++/// Delivery is delegated to <paramref name="send"/>; configuration is applied through
++/// <paramref name="isConfigured"/> (e.g. "webhook/token non-empty"), so an unconfigured channel
++/// stays quiet instead of failing on every event.
++/// </summary>
++public sealed class HttpBatchedPushSink : ILogEventSink, IDisposable
++{
++    private const int MaxMessagesPerBatch = 40;
++    private const int MaxMessageLength = 3500;
++    private const int BatchIntervalSeconds = 10;
++
++    private readonly Func<string, CancellationToken, Task> _send;
++    private readonly Func<bool> _isConfigured;
++    private readonly ConcurrentQueue<string> _queue = new();
++    private readonly CancellationTokenSource _cts = new();
++    private readonly object _flushLock = new();
++    private Thread? _worker;
++    private volatile bool _disposed;
++
++    public HttpBatchedPushSink(
++        Func<string, CancellationToken, Task> send,
++        Func<bool> isConfigured
++    )
++    {
++        _send = send;
++        _isConfigured = isConfigured;
++        _worker = new Thread(WorkerLoop)
++        {
++            IsBackground = true,
++            Name = $"{nameof(HttpBatchedPushSink)}-{GetHashCode():x}",
++        };
++        _worker.Start();
++    }
++
++    public void Emit(LogEvent logEvent)
++    {
++        if (_disposed || !_isConfigured())
++            return;
++
++        var line = logEvent.RenderMessage().Trim();
++        if (string.IsNullOrWhiteSpace(line))
++            return;
++        if (line.Length > MaxMessageLength)
++            line = line[..MaxMessageLength] + "…";
++
++        _queue.Enqueue(line);
++    }
++
++    private void WorkerLoop()
++    {
++        try
++        {
++            while (!_cts.IsCancellationRequested)
++            {
++                try
++                {
++                    Drain();
++                }
++                catch
++                {
++                    // keep the loop alive; failures are reported by the send delegate
++                }
++
++                _cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(BatchIntervalSeconds));
++            }
++        }
++        catch (OperationCanceledException)
++        {
++            // normal shutdown
++        }
++    }
++
++    private void Drain()
++    {
++        if (_queue.IsEmpty || !_isConfigured())
++            return;
++
++        lock (_flushLock)
++        {
++            if (_queue.IsEmpty)
++                return;
++
++            var builder = new StringBuilder();
++            var count = 0;
++            while (count < MaxMessagesPerBatch && _queue.TryDequeue(out var line))
++            {
++                builder.AppendLine(line);
++                count++;
++            }
++            if (count == 0)
++                return;
++
++            // 发送用 CancellationToken.None：Dispose 阶段已取消 _cts，但最终 flush 仍要
++            // 把已入队的消息发出去，不能因取消而静默丢弃。
++            _send(builder.ToString().TrimEnd(), CancellationToken.None).Wait(TimeSpan.FromSeconds(8));
++        }
++    }
++
++    public void Dispose()
++    {
++        if (_disposed)
++            return;
++        _disposed = true;
++
++        try
++        {
++            _cts.Cancel();
++        }
++        catch
++        {
++            // ignore
++        }
++
++        try
++        {
++            Drain();
++        }
++        catch
++        {
++            // best effort final flush
++        }
++
++        _worker?.Join(TimeSpan.FromSeconds(4));
++        _worker = null;
++        _cts.Dispose();
++    }
++}
+diff --git a/src/Ray.BiliBiliTool.Push/PushSinkExtensions.cs b/src/Ray.BiliBiliTool.Push/PushSinkExtensions.cs
+new file mode 100644
+index 0000000..025519f
+--- /dev/null
++++ b/src/Ray.BiliBiliTool.Push/PushSinkExtensions.cs
+@@ -0,0 +1,104 @@
++using System.Net.Http.Json;
++using System.Text.Json;
++using Serilog;
++using Serilog.Configuration;
++using Serilog.Events;
++
++namespace Ray.BiliBiliTool.Push;
++
++/// <summary>
++/// Serilog sink extension methods for the built-in push channels (Feishu bot, Bark, PushDeer).
++///
++/// They are discovered by <c>Serilog.Settings.Configuration</c> because the Web host lists
++/// <c>Ray.BiliBiliTool.Web</c> in <c>Serilog:Using</c>, and their args are bound from the
++/// <c>Serilog:WriteTo:{index}:Args</c> section (persisted by the push-config page).
++/// </summary>
++public static class PushSinkExtensions
++{
++    /// <summary>
++    /// 飞书群机器人：POST <see cref="webHookUrl"/>，消息体为 text 类型。
++    /// </summary>
++    public static LoggerConfiguration FeishuPush(
++        this LoggerSinkConfiguration loggerSinkConfiguration,
++        string webHookUrl,
++        LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum
++    ) =>
++        loggerSinkConfiguration.Sink(
++            new HttpBatchedPushSink(
++                (message, ct) =>
++                    PushHttp.PostJsonAsync(
++                        webHookUrl,
++                        new { msg_type = "text", content = new { text = message } },
++                        ct
++                    ),
++                () => !string.IsNullOrWhiteSpace(webHookUrl)
++            ),
++            restrictedToMinimumLevel
++        );
++
++    /// <summary>
++    /// Bark（iOS 推送）：POST 到 <c>{server}/{deviceKey}</c>，消息体为 JSON。
++    /// </summary>
++    public static LoggerConfiguration BarkPush(
++        this LoggerSinkConfiguration loggerSinkConfiguration,
++        string server = "https://api.day.app",
++        string deviceKey = "",
++        LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum
++    ) =>
++        loggerSinkConfiguration.Sink(
++            new HttpBatchedPushSink(
++                (message, ct) =>
++                    PushHttp.PostJsonAsync(
++                        $"{server.TrimEnd('/')}/{Uri.EscapeDataString(deviceKey)}",
++                        new { title = "BiliTool", body = message },
++                        ct
++                    ),
++                () => !string.IsNullOrWhiteSpace(deviceKey)
++            ),
++            restrictedToMinimumLevel
++        );
++
++    /// <summary>
++    /// PushDeer：POST 到 <c>{endpoint}/message/push</c>，markdown 类型。
++    /// </summary>
++    public static LoggerConfiguration PushDeerPush(
++        this LoggerSinkConfiguration loggerSinkConfiguration,
++        string endpoint = "https://api2.pushdeer.com",
++        string pushkey = "",
++        LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum
++    ) =>
++        loggerSinkConfiguration.Sink(
++            new HttpBatchedPushSink(
++                (message, ct) =>
++                    PushHttp.PostJsonAsync(
++                        $"{endpoint.TrimEnd('/')}/message/push",
++                        new
++                        {
++                            pushkey,
++                            text = "BiliTool",
++                            desp = message,
++                            type = "markdown",
++                        },
++                        ct
++                    ),
++                () => !string.IsNullOrWhiteSpace(pushkey)
++            ),
++            restrictedToMinimumLevel
++        );
++}
++
++internal static class PushHttp
++{
++    private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(8) };
++
++    public static async Task PostJsonAsync(string url, object payload, CancellationToken ct)
++    {
++        var json = JsonSerializer.Serialize(payload);
++        using var request = new HttpRequestMessage(HttpMethod.Post, url)
++        {
++            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
++        };
++        using var response = await Client.SendAsync(request, ct);
++        response.EnsureSuccessStatusCode();
++    }
++}
+diff --git a/src/Ray.BiliBiliTool.Push/Ray.BiliBiliTool.Push.csproj b/src/Ray.BiliBiliTool.Push/Ray.BiliBiliTool.Push.csproj
+new file mode 100644
+index 0000000..097383e
+--- /dev/null
++++ b/src/Ray.BiliBiliTool.Push/Ray.BiliBiliTool.Push.csproj
+@@ -0,0 +1,11 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <TargetFramework>net10.0</TargetFramework>
++    <ImplicitUsings>enable</ImplicitUsings>
++    <Nullable>enable</Nullable>
++  </PropertyGroup>
++  <ItemGroup>
++    <PackageReference Include="Serilog" />
++    <PackageReference Include="Serilog.Settings.Configuration" />
++  </ItemGroup>
++</Project>
+diff --git a/src/Ray.BiliBiliTool.Web/Ray.BiliBiliTool.Web.csproj b/src/Ray.BiliBiliTool.Web/Ray.BiliBiliTool.Web.csproj
+index 17906c6..51549df 100644
+--- a/src/Ray.BiliBiliTool.Web/Ray.BiliBiliTool.Web.csproj
++++ b/src/Ray.BiliBiliTool.Web/Ray.BiliBiliTool.Web.csproj
+@@ -39,6 +39,7 @@
+     <ProjectReference Include="..\BlazingQuartz.Core\BlazingQuartz.Core.csproj" />
+     <ProjectReference Include="..\Ray.BiliBiliTool.Application\Ray.BiliBiliTool.Application.csproj" />
+     <ProjectReference Include="..\Ray.BiliBiliTool.Infrastructure.EF\Ray.BiliBiliTool.Infrastructure.EF.csproj" />
++    <ProjectReference Include="..\Ray.BiliBiliTool.Push\Ray.BiliBiliTool.Push.csproj" />
+     <ProjectReference Include="..\Ray.BiliBiliTool.Web.Client\Ray.BiliBiliTool.Web.Client.csproj" />
+   </ItemGroup>
+   <ItemGroup>
+diff --git a/src/Ray.BiliBiliTool.Web/appsettings.json b/src/Ray.BiliBiliTool.Web/appsettings.json
+index 3460163..a74b499 100644
+--- a/src/Ray.BiliBiliTool.Web/appsettings.json
++++ b/src/Ray.BiliBiliTool.Web/appsettings.json
+@@ -114,7 +114,8 @@
+       "Ray.Serilog.Sinks.PushPlusBatched",
+       "Ray.Serilog.Sinks.MicrosoftTeamsBatched",
+       "Ray.Serilog.Sinks.WorkWeiXinAppBatched",
+-      "Ray.Serilog.Sinks.GotifyBatched"
++      "Ray.Serilog.Sinks.GotifyBatched",
++      "Ray.BiliBiliTool.Push"
+     ],
+     "MinimumLevel": {
+       "Default": "Information",
+@@ -240,6 +241,32 @@
+           "token": "", //必填，应用（app）的token
+           "restrictedToMinimumLevel": "Information"
+         }
++      },
++      //13.飞书机器人（https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot）
++      {
++        "Name": "FeishuPush",
++        "Args": {
++          "webHookUrl": "", //群机器人 Webhook 地址，如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx
++          "restrictedToMinimumLevel": "Information"
++        }
++      },
++      //14.Bark（iOS 推送，https://github.com/Finb/Bark）
++      {
++        "Name": "BarkPush",
++        "Args": {
++          "server": "https://api.day.app", //Bark 服务器地址
++          "deviceKey": "", //设备 Key，必填
++          "restrictedToMinimumLevel": "Information"
++        }
++      },
++      //15.PushDeer（https://www.pushdeer.com）
++      {
++        "Name": "PushDeerPush",
++        "Args": {
++          "endpoint": "https://api2.pushdeer.com", //PushDeer 服务器地址
++          "pushkey": "", //PushKey，必填
++          "restrictedToMinimumLevel": "Information"
++        }
+       }
+     ],
+     "Enrich": [ "FromLogContext" ]
+-- 
+2.54.0 (Apple Git-157)
+

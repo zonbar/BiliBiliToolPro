@@ -1,0 +1,76 @@
+From c912fccefc7ceb6de0307e3a704f830b7bcbefb4 Mon Sep 17 00:00:00 2001
+From: jon <jon@local>
+Date: Mon, 19 Oct 2026 09:04:19 +0800
+Subject: [PATCH 4/4] feat(console): enable built-in Feishu/Bark/PushDeer
+ channels
+
+Reference Ray.BiliBiliTool.Push and register the three sinks in Serilog:Using
+and WriteTo:13/14/15, so the Console host pushes through the same built-in
+channels as the Web host.
+---
+ .../Ray.BiliBiliTool.Console.csproj           |  1 +
+ src/Ray.BiliBiliTool.Console/appsettings.json | 29 ++++++++++++++++++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/src/Ray.BiliBiliTool.Console/Ray.BiliBiliTool.Console.csproj b/src/Ray.BiliBiliTool.Console/Ray.BiliBiliTool.Console.csproj
+index bcb1cea..dd01641 100644
+--- a/src/Ray.BiliBiliTool.Console/Ray.BiliBiliTool.Console.csproj
++++ b/src/Ray.BiliBiliTool.Console/Ray.BiliBiliTool.Console.csproj
+@@ -55,6 +55,7 @@
+     <ProjectReference Include="..\Ray.BiliBiliTool.Config\Ray.BiliBiliTool.Config.csproj" />
+     <ProjectReference Include="..\Ray.BiliBiliTool.DomainService\Ray.BiliBiliTool.DomainService.csproj" />
+     <ProjectReference Include="..\Ray.BiliBiliTool.Infrastructure\Ray.BiliBiliTool.Infrastructure.csproj" />
++    <ProjectReference Include="..\Ray.BiliBiliTool.Push\Ray.BiliBiliTool.Push.csproj" />
+   </ItemGroup>
+   <ItemGroup>
+     <None Update="appsettings.Development.json">
+diff --git a/src/Ray.BiliBiliTool.Console/appsettings.json b/src/Ray.BiliBiliTool.Console/appsettings.json
+index f4def56..0a0b873 100644
+--- a/src/Ray.BiliBiliTool.Console/appsettings.json
++++ b/src/Ray.BiliBiliTool.Console/appsettings.json
+@@ -122,7 +122,8 @@
+       "Ray.Serilog.Sinks.PushPlusBatched",
+       "Ray.Serilog.Sinks.MicrosoftTeamsBatched",
+       "Ray.Serilog.Sinks.WorkWeiXinAppBatched",
+-      "Ray.Serilog.Sinks.GotifyBatched"
++      "Ray.Serilog.Sinks.GotifyBatched",
++      "Ray.BiliBiliTool.Push"
+     ],
+     "MinimumLevel": {
+       "Default": "Debug",
+@@ -247,6 +248,32 @@
+           "token": "", //必填，应用（app）的token
+           "restrictedToMinimumLevel": "Information"
+         }
++      },
++      //13.飞书机器人（https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot）
++      {
++        "Name": "FeishuPush",
++        "Args": {
++          "webHookUrl": "", //群机器人 Webhook 地址
++          "restrictedToMinimumLevel": "Information"
++        }
++      },
++      //14.Bark（iOS 推送，https://github.com/Finb/Bark）
++      {
++        "Name": "BarkPush",
++        "Args": {
++          "server": "https://api.day.app", //Bark 服务器地址
++          "deviceKey": "", //设备 Key，必填
++          "restrictedToMinimumLevel": "Information"
++        }
++      },
++      //15.PushDeer（https://www.pushdeer.com）
++      {
++        "Name": "PushDeerPush",
++        "Args": {
++          "endpoint": "https://api2.pushdeer.com", //PushDeer 服务器地址
++          "pushkey": "", //PushKey，必填
++          "restrictedToMinimumLevel": "Information"
++        }
+       }
+     ],
+     "Enrich": [ "FromLogContext" ]
+-- 
+2.54.0 (Apple Git-157)
+

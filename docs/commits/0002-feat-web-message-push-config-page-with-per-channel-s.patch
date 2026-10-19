@@ -1,0 +1,849 @@
+From 7bb27665f0494b7c01ab1b65f4a2ddf467069402 Mon Sep 17 00:00:00 2001
+From: jon <jon@local>
+Date: Mon, 19 Oct 2026 09:04:09 +0800
+Subject: [PATCH 2/4] feat(web): message-push config page with per-channel save
+ + test
+
+Adds /Configurations/PushConfig rendering all 10 Ray.Serilog push channels with
+per-channel save (SQLite overlay + hot Reload, no restart) and a one-channel
+test push built from an isolated temporary Serilog pipeline.
+---
+ docs/configuration.md                         |   2 +
+ .../Components/Layout/NavMenu.razor           |   3 +
+ .../Components/Pages/Configs/PushConfig.razor | 209 ++++++++++
+ .../Extensions/ServiceCollectionExtension.cs  |   1 +
+ .../Pages/Configs/PushChannelCatalog.cs       | 394 ++++++++++++++++++
+ .../Pages/Configs/PushSettingsWorkflow.cs     | 165 ++++++++
+ 6 files changed, 774 insertions(+)
+ create mode 100644 src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor
+ create mode 100644 src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushChannelCatalog.cs
+ create mode 100644 src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushSettingsWorkflow.cs
+
+diff --git a/docs/configuration.md b/docs/configuration.md
+index da9c921..cfe7a2a 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -401,6 +401,8 @@ Specify a creator ID for automatic charging. Older behavior allowed charging you
+ <a id="markdown-38-推送相关" name="38-推送相关"></a>
+ ### 3.8. Notifications
+ 
++In the Web panel, open **Task configuration → Message push** (`/Configurations/PushConfig`) to configure every push channel below (Telegram, WeCom group bot, DingTalk, ServerChan, CoolPush, custom API, PushPlus, Microsoft Teams, WeCom app, and Gotify) through the UI, and use the per-channel **Test message** button to verify a channel before relying on it. Settings are stored in the SQLite config table (`Serilog__WriteTo__{index}__Args__...`), take effect immediately after saving, and do not require a restart.
++
+ #### Account checks and scheduled-task failure summaries
+ 
+ In the Web panel, open **Task configuration → Checks and reminders** to configure automatic account checks, Cookie expiry reminders, and per-task failure reminders.
+diff --git a/src/Ray.BiliBiliTool.Web/Components/Layout/NavMenu.razor b/src/Ray.BiliBiliTool.Web/Components/Layout/NavMenu.razor
+index cd68d59..32cd69a 100644
+--- a/src/Ray.BiliBiliTool.Web/Components/Layout/NavMenu.razor
++++ b/src/Ray.BiliBiliTool.Web/Components/Layout/NavMenu.razor
+@@ -20,6 +20,9 @@
+     <MudNavLink Href="Configurations/NotificationConfig" Icon="@Icons.Material.Filled.NotificationsActive">
+         检查与提醒
+     </MudNavLink>
++    <MudNavLink Href="Configurations/PushConfig" Icon="@Icons.Material.Filled.Send">
++        消息推送
++    </MudNavLink>
+     <MudNavLink Href="Configurations/DailyJobConfig" Icon="@Icons.Material.Filled.Paid">
+         每日任务
+     </MudNavLink>
+diff --git a/src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor b/src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor
+new file mode 100644
+index 0000000..41ac033
+--- /dev/null
++++ b/src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor
+@@ -0,0 +1,209 @@
++@page "/Configurations/PushConfig"
++@using Microsoft.AspNetCore.Authorization
++@using Ray.BiliBiliTool.Web.Services.Pages.Configs
++@attribute [Authorize]
++@rendermode InteractiveServer
++@inject IPushSettingsWorkflow Workflow
++
++<PageTitle>消息推送</PageTitle>
++
++<MudContainer Class="app-config-page">
++    <PageHero Size="Size.Small" Title="消息推送" Description="配置 Telegram、企业微信、钉钉等推送通道，并发送测试消息验证。" />
++
++    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
++        Cookie 过期提醒、任务失败汇总等通知会经由 Serilog 日志管道转发到下方已配置的推送通道。
++        修改配置并保存后立即生效，无需重启应用；各通道的参数保存在 config/BiliBiliTool.db 中，请勿泄露 Token 等敏感信息。
++    </MudAlert>
++
++    @if (_loading)
++    {
++        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
++    }
++    else
++    {
++        <MudExpansionPanels MultiExpansion="true">
++            @foreach (var channel in _channels)
++            {
++                <MudExpansionPanel Class="mb-2">
++                    <TitleContent>
++                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
++                            <MudIcon Icon="@channel.Definition.Icon" Size="Size.Medium" Color="Color.Primary" />
++                            <MudText Typo="Typo.h6">@channel.Definition.DisplayName</MudText>
++                            @if (channel.Configured)
++                            {
++                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">已配置</MudChip>
++                            }
++                            else
++                            {
++                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">未配置</MudChip>
++                            }
++                        </MudStack>
++                    </TitleContent>
++                    <ChildContent>
++                        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-3">
++                            @channel.Definition.Description
++                        </MudText>
++                        <MudGrid>
++                            @foreach (var field in channel.Definition.Fields)
++                            {
++                                <MudItem xs="12" md="@(field.Kind == PushFieldKind.TextArea ? 12 : 6)">
++                                    @switch (field.Kind)
++                                    {
++                                        case PushFieldKind.TextArea:
++                                            <MudTextArea Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
++                                                         Label="@FieldLabel(field)" Rows="3"
++                                                         Placeholder="@field.Placeholder" HelperText="@field.HelperText" />
++                                            break;
++                                        case PushFieldKind.Password:
++                                            <MudTextField T="string" Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
++                                                          Label="@FieldLabel(field)" InputType="InputType.Password"
++                                                          Placeholder="@field.Placeholder" HelperText="@field.HelperText" />
++                                            break;
++                                        case PushFieldKind.Select:
++                                            <MudSelect T="string" Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
++                                                       Label="@FieldLabel(field)" HelperText="@field.HelperText">
++                                                <MudSelectItem Value="@string.Empty">（留空）</MudSelectItem>
++                                                @foreach (var option in field.Options ?? [])
++                                                {
++                                                    <MudSelectItem Value="@option">@option</MudSelectItem>
++                                                }
++                                            </MudSelect>
++                                            break;
++                                        default:
++                                            <MudTextField T="string" Value="GetValue(channel, field)" ValueChanged="value => SetValue(channel, field, value)"
++                                                          Label="@FieldLabel(field)"
++                                                          Placeholder="@field.Placeholder" HelperText="@field.HelperText" />
++                                            break;
++                                    }
++                                </MudItem>
++                            }
++                        </MudGrid>
++                        <MudStack Row="true" Spacing="2" Class="mt-3" AlignItems="AlignItems.Center">
++                            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="() => SaveAsync(channel)" Disabled="@(channel.Testing || channel.Saving)">
++                                <MudIcon Icon="@Icons.Material.Filled.Save" Class="mr-1" /> 保存
++                            </MudButton>
++                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="() => TestAsync(channel)" Disabled="@(channel.Testing || channel.Saving)">
++                                发送测试消息
++                            </MudButton>
++                            @if (channel.Testing)
++                            {
++                                <MudProgressCircular Size="Size.Small" Color="Color.Primary" Indeterminate="true" />
++                            }
++                        </MudStack>
++                        @if (channel.Message is not null)
++                        {
++                            <MudAlert Severity="@(channel.Success ? Severity.Success : Severity.Error)" Variant="Variant.Outlined" Class="mt-3">
++                                @channel.Message
++                            </MudAlert>
++                        }
++                    </ChildContent>
++                </MudExpansionPanel>
++            }
++        </MudExpansionPanels>
++    }
++</MudContainer>
++
++@code {
++    private bool _loading = true;
++    private List<ChannelEditState> _channels = [];
++
++    protected override void OnInitialized()
++    {
++        Load();
++    }
++
++    private void Load()
++    {
++        try
++        {
++            var current = Workflow.Read();
++            _channels = PushChannelCatalog
++                .All.Select(channel =>
++                {
++                    var values = current.TryGetValue(channel.Index, out var stored)
++                        ? new Dictionary<string, string>(stored, StringComparer.OrdinalIgnoreCase)
++                        : channel.Fields.ToDictionary(
++                            field => field.Key,
++                            field => field.DefaultValue ?? string.Empty,
++                            StringComparer.OrdinalIgnoreCase
++                        );
++                    return new ChannelEditState(channel, values, channel.IsChannelConfigured(values));
++                })
++                .ToList();
++        }
++        finally
++        {
++            _loading = false;
++        }
++    }
++
++    private static string FieldLabel(PushFieldDefinition field) =>
++        field.Required ? $"{field.Label} *" : field.Label;
++
++    private string GetValue(ChannelEditState channel, PushFieldDefinition field) =>
++        channel.Values.TryGetValue(field.Key, out var value) ? value : string.Empty;
++
++    private void SetValue(ChannelEditState channel, PushFieldDefinition field, string? value)
++    {
++        channel.Values[field.Key] = value ?? string.Empty;
++        StateHasChanged();
++    }
++
++    private async Task SaveAsync(ChannelEditState channel)
++    {
++        channel.Saving = true;
++        channel.Message = null;
++        try
++        {
++            Workflow.Save(channel.Definition.Index, channel.Values);
++            channel.Configured = channel.Definition.IsChannelConfigured(channel.Values);
++            channel.Success = true;
++            channel.Message = "配置已保存，推送通道已生效。";
++        }
++        catch (Exception error)
++        {
++            channel.Success = false;
++            channel.Message = error is InvalidOperationException ? error.Message : "保存失败，请稍后重试";
++        }
++        finally
++        {
++            channel.Saving = false;
++        }
++    }
++
++    private async Task TestAsync(ChannelEditState channel)
++    {
++        channel.Testing = true;
++        channel.Message = null;
++        try
++        {
++            var result = await Workflow.TestAsync(channel.Definition, channel.Values);
++            channel.Success = result.Success;
++            channel.Message = result.Message;
++        }
++        catch (Exception error)
++        {
++            channel.Success = false;
++            channel.Message = $"发送失败：{error.Message}";
++        }
++        finally
++        {
++            channel.Testing = false;
++        }
++    }
++
++    private sealed class ChannelEditState(
++        PushChannelDefinition definition,
++        Dictionary<string, string> values,
++        bool configured
++    )
++    {
++        public PushChannelDefinition Definition { get; } = definition;
++        public Dictionary<string, string> Values { get; } = values;
++        public bool Configured { get; set; } = configured;
++        public string? Message { get; set; }
++        public bool Success { get; set; }
++        public bool Testing { get; set; }
++        public bool Saving { get; set; }
++    }
++}
+diff --git a/src/Ray.BiliBiliTool.Web/Extensions/ServiceCollectionExtension.cs b/src/Ray.BiliBiliTool.Web/Extensions/ServiceCollectionExtension.cs
+index 7d492d9..e5c871f 100644
+--- a/src/Ray.BiliBiliTool.Web/Extensions/ServiceCollectionExtension.cs
++++ b/src/Ray.BiliBiliTool.Web/Extensions/ServiceCollectionExtension.cs
+@@ -32,6 +32,7 @@ public static class ServiceCollectionExtension
+             CookieNotificationSettingsWorkflow
+         >();
+         services.AddScoped<INotificationSettingsWorkflow, NotificationSettingsWorkflow>();
++        services.AddScoped<IPushSettingsWorkflow, PushSettingsWorkflow>();
+         services.AddMemoryCache();
+         services.AddScoped<ILiveMedalDashboardService, LiveMedalDashboardService>();
+ 
+diff --git a/src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushChannelCatalog.cs b/src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushChannelCatalog.cs
+new file mode 100644
+index 0000000..7ac1047
+--- /dev/null
++++ b/src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushChannelCatalog.cs
+@@ -0,0 +1,394 @@
++using MudBlazor;
++
++namespace Ray.BiliBiliTool.Web.Services.Pages.Configs;
++
++/// <summary>
++/// How a push-channel argument is rendered and validated on the push-config page.
++/// </summary>
++public enum PushFieldKind
++{
++    Text,
++    Password,
++    TextArea,
++    Select,
++}
++
++/// <summary>
++/// One configurable argument of a Serilog push sink (for example <c>botToken</c> of TelegramBatched).
++/// </summary>
++public sealed record PushFieldDefinition(
++    string Key,
++    string Label,
++    PushFieldKind Kind = PushFieldKind.Text,
++    bool Required = false,
++    string? Placeholder = null,
++    string? HelperText = null,
++    string[]? Options = null,
++    string? DefaultValue = null
++);
++
++/// <summary>
++/// One push channel, i.e. one entry of the <c>Serilog:WriteTo</c> array in appsettings.json.
++/// </summary>
++public sealed record PushChannelDefinition(
++    int Index,
++    string SinkName,
++    string DisplayName,
++    string Description,
++    string Icon,
++    IReadOnlyList<PushFieldDefinition> Fields,
++    string? DocUrl = null,
++    Func<IReadOnlyDictionary<string, string>, bool>? IsConfigured = null
++)
++{
++    /// <summary>
++    /// Configuration prefix that stores this channel's args, e.g. <c>Serilog:WriteTo:3:Args:</c>.
++    /// </summary>
++    public string ConfigPrefix => $"Serilog:WriteTo:{Index}:Args:";
++
++    /// <summary>
++    /// True when every field needed to deliver messages is non-empty. Used for the 已配置/未配置 badge.
++    /// </summary>
++    public bool IsChannelConfigured(IReadOnlyDictionary<string, string> values) =>
++        IsConfigured?.Invoke(values)
++        ?? Fields.Where(field => field.Required).All(field => !string.IsNullOrWhiteSpace(values.GetValueOrDefault(field.Key)));
++}
++
++/// <summary>
++/// Catalog of every push channel the web panel can manage.
++///
++/// Indexes must match the order of the Serilog sinks in <c>Serilog:WriteTo</c> of
++/// <c>src/Ray.BiliBiliTool.Web/appsettings.json</c> (3 = Telegram, 12 = Gotify, 13 = 飞书机器人,
++/// 14 = Bark, 15 = PushDeer; 0-2 are Console/Debug/File and are not user-configurable channels).
++/// </summary>
++public static class PushChannelCatalog
++{
++    public static IReadOnlyList<PushChannelDefinition> All { get; } = Build();
++
++    private static IReadOnlyList<PushChannelDefinition> Build() =>
++        new[]
++        {
++            new PushChannelDefinition(
++                Index: 3,
++                SinkName: "TelegramBatched",
++                DisplayName: "Telegram 机器人",
++                Description:
++                    "通过 Telegram Bot API 推送消息。先在 @BotFather 创建机器人拿到 token，再给机器人发一条消息，"
++                        + "访问 https://api.telegram.org/bot{TOKEN}/getUpdates 获取 chatId。",
++                Icon: Icons.Material.Filled.Send,
++                DocUrl: "https://core.telegram.org/bots/api",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "botToken",
++                        "Bot Token",
++                        PushFieldKind.Password,
++                        Required: true,
++                        HelperText: "BotFather 创建的机器人 Token。"
++                    ),
++                    new PushFieldDefinition(
++                        "chatId",
++                        "Chat ID",
++                        Required: true,
++                        HelperText: "接收消息的会话 ID，可从 getUpdates 获取。"
++                    ),
++                    new PushFieldDefinition(
++                        "proxy",
++                        "代理",
++                        Placeholder: "user:password@host:port",
++                        HelperText: "可选，Telegram 需要代理时填写。"
++                    ),
++                    new PushFieldDefinition(
++                        "apiHost",
++                        "API 地址",
++                        DefaultValue: "https://api.telegram.org",
++                        HelperText: "可替换为自建反代地址。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 4,
++                SinkName: "WorkWeiXinBatched",
++                DisplayName: "企业微信机器人",
++                Description: "向企业微信群机器人推送消息。在群设置中添加机器人后复制 Webhook 地址。",
++                Icon: Icons.Material.Filled.Work,
++                DocUrl: "https://work.weixin.qq.com/api/doc/90000/90136/91770",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "webHookUrl",
++                        "Webhook 地址",
++                        Required: true,
++                        HelperText: "群机器人生成的 Webhook URL。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 5,
++                SinkName: "DingTalkBatched",
++                DisplayName: "钉钉机器人",
++                Description: "向钉钉群机器人推送消息。群机器人 Webhook 需使用关键字安全设置（如 Ray 或 BiliBili），不支持加签。",
++                Icon: Icons.Material.Filled.NotificationsActive,
++                DocUrl: "https://open.dingtalk.com/document/robots/custom-robot-access",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "webHookUrl",
++                        "Webhook 地址",
++                        Required: true,
++                        HelperText: "钉钉群自定义机器人 Webhook URL。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 6,
++                SinkName: "ServerChanBatched",
++                DisplayName: "Server酱",
++                Description: "通过 Server酱 推送到微信。填写 turboScKey（推荐）或旧版 scKey 任一即可。",
++                Icon: Icons.Material.Filled.Email,
++                DocUrl: "https://sct.ftqq.com/",
++                IsConfigured: values =>
++                    !string.IsNullOrWhiteSpace(values.GetValueOrDefault("turboScKey"))
++                    || !string.IsNullOrWhiteSpace(values.GetValueOrDefault("scKey")),
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "turboScKey",
++                        "turboScKey（推荐）",
++                        PushFieldKind.Password,
++                        HelperText: "Server酱³ 平台生成的 SendKey。"
++                    ),
++                    new PushFieldDefinition(
++                        "scKey",
++                        "scKey（旧版）",
++                        PushFieldKind.Password,
++                        HelperText: "旧版 Server酱 的 SCKEY，与 turboScKey 至少填一个。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 7,
++                SinkName: "CoolPushBatched",
++                DisplayName: "酷推",
++                Description:
++                    "通过酷推推送到 QQ/微信。注意：该渠道曾被反馈 API 行为不稳定、存在封号风险，不推荐使用。",
++                Icon: Icons.Material.Filled.LocalFireDepartment,
++                DocUrl: "https://cp.xuthus.cc/",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "sKey",
++                        "SKey",
++                        PushFieldKind.Password,
++                        Required: true,
++                        HelperText: "酷推平台生成的 SKey。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 8,
++                SinkName: "OtherApiBatched",
++                DisplayName: "自定义 API",
++                Description: "将日志 POST 到你自己的 API 或机器人接口，支持占位符与 JSON 模板。",
++                Icon: Icons.Material.Filled.Code,
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "api",
++                        "API 地址",
++                        Required: true,
++                        Placeholder: "https://example.com/push",
++                        HelperText: "接收消息的接口地址。"
++                    ),
++                    new PushFieldDefinition(
++                        "placeholder",
++                        "占位符",
++                        DefaultValue: "#msg#",
++                        HelperText: "消息内容在模板中的占位符。"
++                    ),
++                    new PushFieldDefinition(
++                        "bodyJsonTemplate",
++                        "请求体 JSON 模板",
++                        PushFieldKind.TextArea,
++                        DefaultValue: """{"msgtype":"markdown","markdown":{"content":#msg#}}""",
++                        HelperText: "作为 POST 请求体；占位符会被 JSON 编码后的日志内容替换（本身已带引号，模板中不要再用引号包裹）。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 9,
++                SinkName: "PushPlusBatched",
++                DisplayName: "PushPlus（推荐）",
++                Description: "通过 PushPlus 推送到微信等渠道，国内网络友好。",
++                Icon: Icons.Material.Filled.Campaign,
++                DocUrl: "https://www.pushplus.plus/doc/",
++                IsConfigured: values =>
++                    !string.IsNullOrWhiteSpace(values.GetValueOrDefault("token")),
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "token",
++                        "Token",
++                        PushFieldKind.Password,
++                        Required: true,
++                        HelperText: "PushPlus 平台生成的 Token。"
++                    ),
++                    new PushFieldDefinition(
++                        "channel",
++                        "渠道",
++                        PushFieldKind.Select,
++                        Options: ["wechat", "webhook", "cp", "sms", "mail"],
++                        HelperText: "wechat=微信公众号，webhook=第三方 webhook，cp=企业微信应用，sms=短信，mail=邮件。留空默认 wechat。"
++                    ),
++                    new PushFieldDefinition(
++                        "topic",
++                        "群组编码 Topic",
++                        HelperText: "用于群发，留空仅发送给自己；channel 为 webhook 时无效。"
++                    ),
++                    new PushFieldDefinition(
++                        "webhook",
++                        "Webhook 编码",
++                        HelperText: "webhook 编码（非地址），仅 channel 为 webhook / cp 时填写。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 10,
++                SinkName: "MicrosoftTeamsBatched",
++                DisplayName: "Microsoft Teams",
++                Description: "向 Teams 频道传入 Webhook 推送消息。",
++                Icon: Icons.Material.Filled.Groups,
++                DocUrl: "https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "webhook",
++                        "Webhook 地址",
++                        Required: true,
++                        HelperText: "Teams 频道生成的完整 Webhook URL。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 11,
++                SinkName: "WorkWeiXinAppBatched",
++                DisplayName: "企业微信应用",
++                Description: "通过企业微信自建应用向成员推送消息，corpId、agentId、secret 必填，toUser/toParty/toTag 至少填一个。",
++                Icon: Icons.Material.Filled.Business,
++                DocUrl: "https://developer.work.weixin.qq.com/tutorial/application-message",
++                IsConfigured: values =>
++                    !string.IsNullOrWhiteSpace(values.GetValueOrDefault("corpId"))
++                    && !string.IsNullOrWhiteSpace(values.GetValueOrDefault("agentId"))
++                    && !string.IsNullOrWhiteSpace(values.GetValueOrDefault("secret"))
++                    && (
++                        !string.IsNullOrWhiteSpace(values.GetValueOrDefault("toUser"))
++                        || !string.IsNullOrWhiteSpace(values.GetValueOrDefault("toParty"))
++                        || !string.IsNullOrWhiteSpace(values.GetValueOrDefault("toTag"))
++                    ),
++                Fields:
++                [
++                    new PushFieldDefinition("corpId", "Corp ID", Required: true),
++                    new PushFieldDefinition("agentId", "Agent ID", Required: true),
++                    new PushFieldDefinition("secret", "Secret", PushFieldKind.Password, Required: true),
++                    new PushFieldDefinition("toUser", "接收人 ToUser", DefaultValue: "@all"),
++                    new PushFieldDefinition("toParty", "接收部门 ToParty"),
++                    new PushFieldDefinition("toTag", "接收标签 ToTag"),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 12,
++                SinkName: "GotifyBatched",
++                DisplayName: "Gotify",
++                Description: "向自建 Gotify 服务器推送消息，需要服务器地址与应用 Token。",
++                Icon: Icons.Material.Filled.Notifications,
++                DocUrl: "https://gotify.net/",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "host",
++                        "服务器地址",
++                        Required: true,
++                        Placeholder: "https://gotify.example.com",
++                        HelperText: "Gotify 服务器地址。"
++                    ),
++                    new PushFieldDefinition(
++                        "token",
++                        "应用 Token",
++                        PushFieldKind.Password,
++                        Required: true,
++                        HelperText: "Gotify 应用（App）的 Token。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 13,
++                SinkName: "FeishuPush",
++                DisplayName: "飞书机器人",
++                Description: "向飞书群机器人推送消息。在群设置中添加自定义机器人后复制 Webhook 地址（如 https://open.feishu.cn/open-apis/bot/v2/hook/xxx）。",
++                Icon: Icons.Material.Filled.Send,
++                DocUrl: "https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot",
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "webHookUrl",
++                        "Webhook 地址",
++                        Required: true,
++                        Placeholder: "https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
++                        HelperText: "飞书群自定义机器人的 Webhook URL。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 14,
++                SinkName: "BarkPush",
++                DisplayName: "Bark",
++                Description: "通过 Bark 推送到 iOS 设备。在 iOS 安装 Bark App 后取得设备 Key，可自建服务器或用官方 https://api.day.app。",
++                Icon: Icons.Material.Filled.Notifications,
++                DocUrl: "https://github.com/Finb/Bark",
++                IsConfigured: values =>
++                    !string.IsNullOrWhiteSpace(values.GetValueOrDefault("deviceKey")),
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "server",
++                        "服务器地址",
++                        DefaultValue: "https://api.day.app",
++                        HelperText: "Bark 服务器地址，默认官方 https://api.day.app。"
++                    ),
++                    new PushFieldDefinition(
++                        "deviceKey",
++                        "设备 Key",
++                        PushFieldKind.Password,
++                        Required: true,
++                        HelperText: "Bark App 中显示的设备 Key。"
++                    ),
++                ]
++            ),
++            new PushChannelDefinition(
++                Index: 15,
++                SinkName: "PushDeerPush",
++                DisplayName: "PushDeer",
++                Description: "通过 PushDeer 推送到微信/App。使用 pushkey 推送，可自建服务器或用官方 https://api2.pushdeer.com。",
++                Icon: Icons.Material.Filled.Email,
++                DocUrl: "https://www.pushdeer.com",
++                IsConfigured: values =>
++                    !string.IsNullOrWhiteSpace(values.GetValueOrDefault("pushkey")),
++                Fields:
++                [
++                    new PushFieldDefinition(
++                        "endpoint",
++                        "服务器地址",
++                        DefaultValue: "https://api2.pushdeer.com",
++                        HelperText: "PushDeer 服务器地址，默认官方 https://api2.pushdeer.com。"
++                    ),
++                    new PushFieldDefinition(
++                        "pushkey",
++                        "PushKey",
++                        PushFieldKind.Password,
++                        Required: true,
++                        HelperText: "PushDeer 平台生成的 PushKey。"
++                    ),
++                ]
++            ),
++        };
++}
+diff --git a/src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushSettingsWorkflow.cs b/src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushSettingsWorkflow.cs
+new file mode 100644
+index 0000000..efc52b9
+--- /dev/null
++++ b/src/Ray.BiliBiliTool.Web/Services/Pages/Configs/PushSettingsWorkflow.cs
+@@ -0,0 +1,165 @@
++using Ray.BiliBiliTool.Config.SQLite;
++using global::Serilog;
++
++namespace Ray.BiliBiliTool.Web.Services.Pages.Configs;
++
++/// <summary>
++/// Result of a test push.
++/// </summary>
++public sealed record PushTestResult(bool Success, string Message);
++
++/// <summary>
++/// 消息推送配置工作流：读取/保存各推送通道（Serilog sink）参数，并向指定通道发送测试消息。
++/// </summary>
++public interface IPushSettingsWorkflow
++{
++    /// <summary>
++    /// 读取每个通道当前生效的参数（含 SQLite 覆盖层与 appsettings 默认值）。
++    /// </summary>
++    IReadOnlyDictionary<int, IReadOnlyDictionary<string, string>> Read();
++
++    /// <summary>
++    /// 保存单个通道的参数到 SQLite 配置表并触发配置重载（Serilog 热更新，无需重启）。
++    /// </summary>
++    void Save(int channelIndex, IReadOnlyDictionary<string, string> values);
++
++    /// <summary>
++    /// 仅使用目标通道构建一个临时 Serilog 管道，发送一条测试消息。
++    /// 返回成功仅代表消息已提交发送，请到目标应用确认是否送达。
++    /// </summary>
++    Task<PushTestResult> TestAsync(
++        PushChannelDefinition channel,
++        IReadOnlyDictionary<string, string> values
++    );
++}
++
++public sealed class PushSettingsWorkflow(IConfiguration configuration)
++    : IPushSettingsWorkflow
++{
++    private readonly IConfiguration _configuration = configuration;
++
++    public IReadOnlyDictionary<int, IReadOnlyDictionary<string, string>> Read()
++    {
++        var result = new Dictionary<int, IReadOnlyDictionary<string, string>>();
++        foreach (var channel in PushChannelCatalog.All)
++        {
++            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
++            foreach (var field in channel.Fields)
++            {
++                values[field.Key] =
++                    _configuration[$"{channel.ConfigPrefix}{field.Key}"]
++                    ?? field.DefaultValue
++                    ?? string.Empty;
++            }
++            result[channel.Index] = values;
++        }
++        return result;
++    }
++
++    public void Save(int channelIndex, IReadOnlyDictionary<string, string> values)
++    {
++        var channel =
++            PushChannelCatalog.All.FirstOrDefault(item => item.Index == channelIndex)
++            ?? throw new InvalidOperationException("未知的推送通道，请刷新页面后重试");
++
++        var missing = channel.Fields
++            .Where(field => field.Required && string.IsNullOrWhiteSpace(values.GetValueOrDefault(field.Key)))
++            .Select(field => field.Label)
++            .ToArray();
++        if (missing.Length > 0)
++            throw new InvalidOperationException($"请先填写必填项：{string.Join("、", missing)}");
++
++        var root = _configuration as IConfigurationRoot;
++        var provider =
++            root?.Providers.OfType<SqliteConfigurationProvider>().LastOrDefault()
++            ?? throw new InvalidOperationException("保存失败，请稍后重试");
++
++        var configValues = new Dictionary<string, string>();
++        var keysToDelete = new List<string>();
++        foreach (var field in channel.Fields)
++        {
++            var value = values.GetValueOrDefault(field.Key);
++            var key = $"{channel.ConfigPrefix}{field.Key}";
++            if (string.IsNullOrWhiteSpace(value))
++            {
++                // 清空用户输入时，删除 SQLite 覆盖键，回退到 appsettings 默认值。
++                keysToDelete.Add(key);
++            }
++            else
++            {
++                configValues[key] = value;
++            }
++        }
++        provider.BatchSet(configValues, keysToDelete);
++        root!.Reload();
++    }
++
++    public async Task<PushTestResult> TestAsync(
++        PushChannelDefinition channel,
++        IReadOnlyDictionary<string, string> values
++    )
++    {
++        var missing = channel.Fields
++            .Where(field => field.Required && string.IsNullOrWhiteSpace(values.GetValueOrDefault(field.Key)))
++            .Select(field => field.Label)
++            .ToArray();
++        if (missing.Length > 0)
++            return new PushTestResult(false, $"请先填写必填项：{string.Join("、", missing)}");
++
++        // 用内存配置构建一条只包含目标通道的临时 Serilog 管道，避免干扰主日志管道。
++        var tempValues = new Dictionary<string, string?>
++        {
++            ["Serilog:MinimumLevel:Default"] = "Information",
++            ["Serilog:WriteTo:0:Name"] = channel.SinkName,
++        };
++
++        var usingList = _configuration.GetSection("Serilog:Using").Get<string[]>() ?? [];
++        for (int i = 0; i < usingList.Length; i++)
++            tempValues[$"Serilog:Using:{i}"] = usingList[i];
++
++        foreach (var field in channel.Fields)
++        {
++            var value = values.GetValueOrDefault(field.Key);
++            if (!string.IsNullOrWhiteSpace(value))
++                tempValues[$"Serilog:WriteTo:0:Args:{field.Key}"] = value;
++        }
++
++        var testConfig = new ConfigurationBuilder()
++            .AddInMemoryCollection(tempValues)
++            .Build();
++
++        global::Serilog.Core.Logger? testLogger = null;
++        try
++        {
++            testLogger = new LoggerConfiguration()
++                .ReadFrom.Configuration(testConfig)
++                .CreateLogger();
++            var message =
++                $"[BiliTool 推送测试] 这是一条来自 BiliBiliToolPro Web 面板的测试消息。"
++                + $"\n通道：{channel.DisplayName}"
++                + $"\n时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}"
++                + $"\n如果收到本消息，说明推送通道配置正确。";
++            testLogger.Warning(message);
++
++            // 等待临时管道刷出批量消息；即使超时，发送也已在后台继续。
++            await Task.WhenAny(
++                Task.Run(testLogger.Dispose),
++                Task.Delay(TimeSpan.FromSeconds(15))
++            );
++
++            return new PushTestResult(
++                true,
++                $"测试消息已通过「{channel.DisplayName}」通道发送，请在目标应用（如 Telegram / 微信 / 钉钉）中确认是否收到。"
++            );
++        }
++        catch (Exception ex)
++        {
++            return new PushTestResult(false, $"发送失败：{ex.Message}");
++        }
++        finally
++        {
++            // 正常路径 dispose 已执行；超时路径下再次 dispose 是幂等的安全操作。
++            testLogger?.Dispose();
++        }
++    }
++}
+-- 
+2.54.0 (Apple Git-157)
+

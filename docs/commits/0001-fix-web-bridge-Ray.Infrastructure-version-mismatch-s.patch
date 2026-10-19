@@ -1,0 +1,60 @@
+From e00ff6e5eed796289ea9221f6f70eceee139a30b Mon Sep 17 00:00:00 2001
+From: jon <jon@local>
+Date: Mon, 19 Oct 2026 09:04:09 +0800
+Subject: [PATCH 1/4] fix(web): bridge Ray.Infrastructure version mismatch so
+ push actually sends
+
+Ray.Serilog.Sinks.* (v0.1.6) compile against Ray.Infrastructure 0.0.26, but
+Directory.Packages.props pins it to 0.1.2 (NU1902 ImageSharp CVE). .NET does not
+unify assembly versions, so every real push threw
+Could not load file or assembly 'Ray.Infrastructure, Version=0.0.26.0'.
+
+Register an AppDomain.AssemblyResolve shim that redirects requests for
+Ray.Infrastructure < 0.1.0 to the already-loaded 0.1.2 assembly.
+---
+ src/Ray.BiliBiliTool.Web/Program.cs | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/Ray.BiliBiliTool.Web/Program.cs b/src/Ray.BiliBiliTool.Web/Program.cs
+index 9f6c13e..748bd5d 100644
+--- a/src/Ray.BiliBiliTool.Web/Program.cs
++++ b/src/Ray.BiliBiliTool.Web/Program.cs
+@@ -11,10 +11,35 @@ using Ray.BiliBiliTool.Web.Extensions;
+ using Ray.BiliBiliTool.Web.Services.Pages.BiliAccount;
+ using Serilog;
+ using Serilog.Debugging;
++using System.Reflection;
+ 
+ SelfLog.Enable(Console.Error);
+ Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
+ 
++// 推送通道包（Ray.Serilog.Sinks.*，v0.1.6）编译时引用 Ray.Infrastructure 0.0.26，
++// 而仓库出于 NU1902 安全修复（见 common.props）将 Ray.Infrastructure 钉在 0.1.2。
++// .NET Core 不做版本统一，导致任意推送通道真正发消息时抛
++// “Could not load file or assembly 'Ray.Infrastructure, Version=0.0.26.0'”。
++// 这里把该请求桥接到当前可用的 Ray.Infrastructure 程序集（0.1.2 为 0.0.26 的后向兼容小版本）。
++AppDomain.CurrentDomain.AssemblyResolve += (_, args) =>
++{
++    var requested = new AssemblyName(args.Name);
++    if (
++        requested.Name == "Ray.Infrastructure"
++        && requested.Version is { } requestedVersion
++        && requestedVersion < new Version(0, 1, 0)
++    )
++    {
++        return
++            AppDomain.CurrentDomain
++                .GetAssemblies()
++                .FirstOrDefault(assembly => assembly.GetName().Name == "Ray.Infrastructure")
++            ?? Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Ray.Infrastructure.dll"));
++    }
++
++    return null;
++};
++
+ try
+ {
+     var builder = WebApplication.CreateBuilder(args);
+-- 
+2.54.0 (Apple Git-157)
+
