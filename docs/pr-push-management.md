@@ -71,3 +71,19 @@ BiliBiliToolPro 的消息推送全部经由 Serilog 日志管道转发到 10 个
 5. 重启应用确认配置仍在（持久化在 SQLite `bili_appsettings`）
 
 > 说明：飞书 / Bark / PushDeer 三个内置渠道通过共享类库 `Ray.BiliBiliTool.Push` 在 Web 与 Console 双主机同时可用；Web 端可经「消息推送」页面可视化配置与测试，Console 端通过 `appsettings.json` 的 `Serilog:WriteTo:13/14/15` 配置。
+
+## 自定义消息标题（Notify:Title）
+
+**检查结论**：全部 13 个推送通道原本都无可配置的消息标题——10 个 Ray sink（Telegram / 钉钉 / 企业微信 / Server酱 / CoolPush / PushPlus / Teams / 自定义API / Gotify / 企业微信应用）的扩展方法参数经反射核验均无 `title`；自研 Bark/PushDeer 在源码里硬编码 `title="BiliTool"`，飞书为 `text` 类型无标题。
+
+**最小改动方案**：所有通道共享同一条消息管道（`SerilogNotificationAdapter` 合成 `[NOTIFICATION] {Title}: {Body}` 后推进 Serilog）。因此在唯一出口注入一个可选的全局标题 `Notify:Title`——设置后每条推送文本统一以 `[<title>]` 开头，所有通道无需改动各自 sink 即全部带上自定义标题；留空则行为完全不变（无需 fork 外部二进制 sink 包）。
+
+**改动文件**（commit `7cbef00`）：
+- `src/Ray.BiliBiliTool.Infrastructure/Notifications/SerilogNotificationAdapter.cs`：构造函数注入 `IConfiguration`，读取 `Notify:Title`，在 `SendAsync` 与 `SendSummaryAsync` 两条路径统一加 `[<title>] ` 前缀。
+- `src/Ray.BiliBiliTool.Web/appsettings.json` 与 `src/Ray.BiliBiliTool.Console/appsettings.json`：新增顶层 `"Notify": { "Title": "" }`（留空为默认）。
+
+**验证**（反射控制台 + 独立 harness，确定性核验）：
+- 10 个 Ray sink 扩展方法签名均无 `title` 参数（botToken/chatId/webHookUrl/token/scKey/host/corpId/api/bodyJsonTemplate…）。✓
+- 设置 `Notify:Title="我的BiliTool提醒"` 后：`SendAsync` → `[我的BiliTool提醒] [NOTIFICATION] 每日任务: 签到完成`；`SendSummaryAsync` → `[我的BiliTool提醒] [NOTIFICATION] Daily\n• Coin: 1`。✓
+- 留空时：`[NOTIFICATION] 每日任务: 签到完成`（无前缀，行为不变）。✓
+- 双主机编译 0 错误 0 警告。✓
