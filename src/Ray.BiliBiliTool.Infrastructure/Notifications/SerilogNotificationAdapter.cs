@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Ray.BiliBiliTool.Application.Contracts.Notifications;
 using Serilog;
@@ -7,17 +8,28 @@ namespace Ray.BiliBiliTool.Infrastructure.Notifications;
 
 /// <summary>
 /// Default notification adapter that routes messages into the existing Serilog pipeline.
+///
+/// The optional <c>Notify:Title</c> setting prepends a custom title to every notification
+/// text. Because all push channels consume this single composed message, a single setting
+/// gives every channel a customizable message title without forking the sink packages.
 /// </summary>
-public class SerilogNotificationAdapter(ILogger<SerilogNotificationAdapter> logger)
-    : INotificationService
+public class SerilogNotificationAdapter(
+    ILogger<SerilogNotificationAdapter> logger,
+    IConfiguration configuration
+) : INotificationService
 {
     private readonly ILogger<SerilogNotificationAdapter> _logger = logger;
+    private readonly string? _customTitle = string.IsNullOrWhiteSpace(
+        configuration["Notify:Title"]
+    )
+        ? null
+        : configuration["Notify:Title"];
 
     public Task SendAsync(NotificationMessage message, string groupKey)
     {
         try
         {
-            string text = $"[NOTIFICATION] {message.Title}: {message.Body}";
+            string text = $"{TitlePrefix}[NOTIFICATION] {message.Title}: {message.Body}";
             _logger.Log(MapLevel(message.Level), text);
         }
         catch (Exception ex)
@@ -42,9 +54,12 @@ public class SerilogNotificationAdapter(ILogger<SerilogNotificationAdapter> logg
         return Task.CompletedTask;
     }
 
-    private static string FormatSummary(string title, SummaryLine[] lines)
+    private string TitlePrefix => _customTitle is null ? string.Empty : $"[{_customTitle}] ";
+
+    private string FormatSummary(string title, SummaryLine[] lines)
     {
         StringBuilder builder = new();
+        builder.Append(TitlePrefix);
         builder.Append("[NOTIFICATION] ");
         builder.AppendLine(title);
 
