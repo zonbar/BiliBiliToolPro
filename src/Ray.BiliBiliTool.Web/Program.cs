@@ -11,9 +11,34 @@ using Ray.BiliBiliTool.Web.Extensions;
 using Ray.BiliBiliTool.Web.Services.Pages.BiliAccount;
 using Serilog;
 using Serilog.Debugging;
+using System.Reflection;
 
 SelfLog.Enable(Console.Error);
 Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateLogger();
+
+// 推送通道包（Ray.Serilog.Sinks.*，v0.1.6）编译时引用 Ray.Infrastructure 0.0.26，
+// 而仓库出于 NU1902 安全修复（见 common.props）将 Ray.Infrastructure 钉在 0.1.2。
+// .NET Core 不做版本统一，导致任意推送通道真正发消息时抛
+// “Could not load file or assembly 'Ray.Infrastructure, Version=0.0.26.0'”。
+// 这里把该请求桥接到当前可用的 Ray.Infrastructure 程序集（0.1.2 为 0.0.26 的后向兼容小版本）。
+AppDomain.CurrentDomain.AssemblyResolve += (_, args) =>
+{
+    var requested = new AssemblyName(args.Name);
+    if (
+        requested.Name == "Ray.Infrastructure"
+        && requested.Version is { } requestedVersion
+        && requestedVersion < new Version(0, 1, 0)
+    )
+    {
+        return
+            AppDomain.CurrentDomain
+                .GetAssemblies()
+                .FirstOrDefault(assembly => assembly.GetName().Name == "Ray.Infrastructure")
+            ?? Assembly.LoadFrom(Path.Combine(AppContext.BaseDirectory, "Ray.Infrastructure.dll"));
+    }
+
+    return null;
+};
 
 try
 {
