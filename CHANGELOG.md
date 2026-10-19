@@ -1,3 +1,7 @@
+## 4.2.5 (unreleased)
+- feat(push): 全局自定义标题改为作为推送主标题（title 字段）下发，覆盖各通道默认标题（如 PushPlus 的 "PushPlus Notification"），并移除正文 `[标题]` 前缀
+- docs(push): 推送配置页「全局消息标题」说明文案同步为 title 字段行为
+- chore(fnos): 飞牛 NAS compose 使用上游默认宿主端口 22330
 ## 4.2.4
 - feat(web): 新增「消息推送」配置页（任务配置 → 消息推送），集中可视化配置并测试全部推送渠道
 - feat(push): 内置飞书、Bark、PushDeer 三个推送通道（共享库 `Ray.BiliBiliTool.Push`，Web / Console 双主机可用）
