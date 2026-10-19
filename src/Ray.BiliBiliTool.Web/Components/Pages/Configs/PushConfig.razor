@@ -26,7 +26,7 @@
             <MudCardContent>
                 <MudText Typo="Typo.h6" Class="mb-1">全局消息标题</MudText>
                 <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-3">
-                    设置后，每条推送消息都会以 <strong>[标题]</strong> 开头，对下方所有推送通道统一生效；留空则不添加标题（默认）。
+                    设置后，推送通知的<strong>主标题（title 字段）</strong>将使用该值，对下方所有推送通道统一生效；留空则使用各通道默认标题（如 PushPlus 的 "PushPlus Notification"）。
                 </MudText>
                 <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-3">
                     <MudTextField T="string" Value="@_title" ValueChanged="value => { _title = value ?? string.Empty; StateHasChanged(); }"
