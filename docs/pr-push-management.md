@@ -81,10 +81,11 @@ BiliBiliToolPro 的消息推送全部经由 Serilog 日志管道转发到 10 个
 **改动文件**（commit `7cbef00`）：
 - `src/Ray.BiliBiliTool.Infrastructure/Notifications/SerilogNotificationAdapter.cs`：构造函数注入 `IConfiguration`，读取 `Notify:Title`，在 `SendAsync` 与 `SendSummaryAsync` 两条路径统一加 `[<title>] ` 前缀。
 - `src/Ray.BiliBiliTool.Web/appsettings.json` 与 `src/Ray.BiliBiliTool.Console/appsettings.json`：新增顶层 `"Notify": { "Title": "" }`（留空为默认）。
-- `src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor` 与 `Services/Pages/Configs/PushSettingsWorkflow.cs`（commit `b1d4a1f` 起）：在「消息推送」页顶部新增「全局消息标题」卡片，经 SQLite 覆盖键 `Notify:Title` 读写并触发配置重载（`ReadTitle()` / `SaveTitle()`），留空则删除覆盖键回退默认。
+- `src/Ray.BiliBiliTool.Web/Components/Pages/Configs/PushConfig.razor` 与 `Services/Pages/Configs/PushSettingsWorkflow.cs`（commit `1a7def4`）：在「消息推送」页顶部新增「全局消息标题」卡片，经 SQLite 覆盖键 `Notify:Title` 读写并触发配置重载（`ReadTitle()` / `SaveTitle()`），留空则删除覆盖键回退默认；通道「发送测试消息」的测试文本同样带上 `[<title>]` 前缀（commit 末尾追加）。
 
 **验证**（反射控制台 + 独立 harness，确定性核验）：
 - 10 个 Ray sink 扩展方法签名均无 `title` 参数（botToken/chatId/webHookUrl/token/scKey/host/corpId/api/bodyJsonTemplate…）。✓
 - 设置 `Notify:Title="我的BiliTool提醒"` 后：`SendAsync` → `[我的BiliTool提醒] [NOTIFICATION] 每日任务: 签到完成`；`SendSummaryAsync` → `[我的BiliTool提醒] [NOTIFICATION] Daily\n• Coin: 1`。✓
 - 留空时：`[NOTIFICATION] 每日任务: 签到完成`（无前缀，行为不变）。✓
 - 双主机编译 0 错误 0 警告。✓
+- **测试消息带标题**：设 `Notify:Title` 后，Web 面板「发送测试消息」的载荷也带 `[<title>]` 前缀（本地捕获服务器实测 `POST /feishu_title {"msg_type":"text","content":{"text":"[测试标题X] [BiliTool 推送测试] …"}}`）。✓

@@ -170,8 +170,11 @@ public sealed class PushSettingsWorkflow(IConfiguration configuration)
             testLogger = new LoggerConfiguration()
                 .ReadFrom.Configuration(testConfig)
                 .CreateLogger();
+            var titlePrefix = string.IsNullOrWhiteSpace(_configuration["Notify:Title"])
+                ? string.Empty
+                : $"[{_configuration["Notify:Title"]}] ";
             var message =
-                $"[BiliTool 推送测试] 这是一条来自 BiliBiliToolPro Web 面板的测试消息。"
+                $"{titlePrefix}[BiliTool 推送测试] 这是一条来自 BiliBiliToolPro Web 面板的测试消息。"
                 + $"\n通道：{channel.DisplayName}"
                 + $"\n时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}"
                 + $"\n如果收到本消息，说明推送通道配置正确。";
