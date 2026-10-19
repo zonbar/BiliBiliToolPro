@@ -39,6 +39,7 @@
     <ProjectReference Include="..\BlazingQuartz.Core\BlazingQuartz.Core.csproj" />
     <ProjectReference Include="..\Ray.BiliBiliTool.Application\Ray.BiliBiliTool.Application.csproj" />
     <ProjectReference Include="..\Ray.BiliBiliTool.Infrastructure.EF\Ray.BiliBiliTool.Infrastructure.EF.csproj" />
+    <ProjectReference Include="..\Ray.BiliBiliTool.Push\Ray.BiliBiliTool.Push.csproj" />
     <ProjectReference Include="..\Ray.BiliBiliTool.Web.Client\Ray.BiliBiliTool.Web.Client.csproj" />
   </ItemGroup>
   <ItemGroup>
