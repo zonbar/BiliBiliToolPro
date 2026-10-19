@@ -1,5 +1,6 @@
 using Ray.BiliBiliTool.Config.SQLite;
 using global::Serilog;
+using Ray.Serilog.Sinks.Batched;
 
 namespace Ray.BiliBiliTool.Web.Services.Pages.Configs;
 
@@ -170,15 +171,17 @@ public sealed class PushSettingsWorkflow(IConfiguration configuration)
             testLogger = new LoggerConfiguration()
                 .ReadFrom.Configuration(testConfig)
                 .CreateLogger();
-            var titlePrefix = string.IsNullOrWhiteSpace(_configuration["Notify:Title"])
-                ? string.Empty
-                : $"[{_configuration["Notify:Title"]}] ";
             var message =
-                $"{titlePrefix}[BiliTool 推送测试] 这是一条来自 BiliBiliToolPro Web 面板的测试消息。"
+                $"[BiliTool 推送测试] 这是一条来自 BiliBiliToolPro Web 面板的测试消息。"
                 + $"\n通道：{channel.DisplayName}"
                 + $"\n时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}"
                 + $"\n如果收到本消息，说明推送通道配置正确。";
             testLogger.Warning(message);
+
+            // 手动以用户配置的全局标题触发临时管道 flush，使测试消息的 title 字段也使用该标题
+            // （与正式推送 BaseJob 的 flush 行为一致），而非各通道的默认标题。
+            var testTitle = _configuration["Notify:Title"] ?? string.Empty;
+            await BatchSinkManager.FlushAllAsync(testTitle);
 
             // 等待临时管道刷出批量消息；即使超时，发送也已在后台继续。
             await Task.WhenAny(

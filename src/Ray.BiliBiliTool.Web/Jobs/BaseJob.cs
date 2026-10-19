@@ -1,5 +1,8 @@
 using System.Reflection;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Quartz;
+using Ray.BiliBiliTool.Infrastructure;
 using Ray.BiliBiliTool.Web.Services;
 using Ray.Serilog.Sinks.Batched;
 using Serilog.Context;
@@ -78,7 +81,11 @@ public abstract class BaseJob<TJob>(
 
         try
         {
-            await BatchSinkManager.FlushAsync(fireInstanceId);
+            // 将用户配置的全局标题作为推送消息的 title 字段传入，覆盖各通道的默认标题
+            // （如 PushPlus 的 "PushPlus Notification"）。留空时各通道回落到各自默认标题。
+            var configuration = Global.ServiceProviderRoot?.GetService<IConfiguration>();
+            var pushTitle = configuration?["Notify:Title"] ?? string.Empty;
+            await BatchSinkManager.FlushAsync(fireInstanceId, pushTitle);
         }
         catch (Exception ex)
         {

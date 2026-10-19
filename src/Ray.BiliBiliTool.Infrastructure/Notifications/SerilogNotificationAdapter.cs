@@ -9,27 +9,22 @@ namespace Ray.BiliBiliTool.Infrastructure.Notifications;
 /// <summary>
 /// Default notification adapter that routes messages into the existing Serilog pipeline.
 ///
-/// The optional <c>Notify:Title</c> setting prepends a custom title to every notification
-/// text. Because all push channels consume this single composed message, a single setting
-/// gives every channel a customizable message title without forking the sink packages.
+/// The message title is delivered as the push <c>title</c> field (see BaseJob flushing
+/// <c>Notify:Title</c> into BatchSinkManager.FlushAsync), while this adapter composes the
+/// message body. <c>Notify:Title</c> is applied at flush time by the job, not as a text
+/// prefix here, so bodies stay clean and each channel's default title is overridden.
 /// </summary>
 public class SerilogNotificationAdapter(
-    ILogger<SerilogNotificationAdapter> logger,
-    IConfiguration configuration
+    ILogger<SerilogNotificationAdapter> logger
 ) : INotificationService
 {
     private readonly ILogger<SerilogNotificationAdapter> _logger = logger;
-    private readonly string? _customTitle = string.IsNullOrWhiteSpace(
-        configuration["Notify:Title"]
-    )
-        ? null
-        : configuration["Notify:Title"];
 
     public Task SendAsync(NotificationMessage message, string groupKey)
     {
         try
         {
-            string text = $"{TitlePrefix}[NOTIFICATION] {message.Title}: {message.Body}";
+            string text = $"[NOTIFICATION] {message.Title}: {message.Body}";
             _logger.Log(MapLevel(message.Level), text);
         }
         catch (Exception ex)
@@ -54,12 +49,9 @@ public class SerilogNotificationAdapter(
         return Task.CompletedTask;
     }
 
-    private string TitlePrefix => _customTitle is null ? string.Empty : $"[{_customTitle}] ";
-
     private string FormatSummary(string title, SummaryLine[] lines)
     {
         StringBuilder builder = new();
-        builder.Append(TitlePrefix);
         builder.Append("[NOTIFICATION] ");
         builder.AppendLine(title);
 
